@@ -1,0 +1,10 @@
+前段（振り分け役）の学習 53 s, 振り分けの正解率 0.944
+後段 0 の学習 43 s
+後段 1 の学習 43 s
+後段 2 の学習 43 s
+後段 3 の学習 43 s
+freq seed 1  前段 8 枚 + 後段 8 枚  後段単独 ['0.984', '0.980', '0.984', '0.980']  学習する数 5193
+shared-all-conf    acc 0.932  route1 None  FFT 672 (63.6%)  ms None
+shared-all-jcal    acc 0.942  route1 None  FFT 672 (63.6%)  ms None
+shared-top1        acc 0.932  route1 0.9440000057220459  FFT 272 (25.8%)  ms 0.06720009999116883
+shared-top2-jcal   acc 0.945  route1 0.9440000057220459  FFT 408 (38.6%)  ms 0.09901350000291131

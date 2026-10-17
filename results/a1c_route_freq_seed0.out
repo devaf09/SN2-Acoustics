@@ -1,0 +1,24 @@
+  freq seed 0 d8 T8: 振り分けの正解率 0.930, 学習 49 s
+  freq seed 0 d8 T4: 振り分けの正解率 0.921, 学習 36 s
+  freq seed 0 d8 T2: 振り分けの正解率 0.874, 学習 35 s
+  freq seed 0 d8 T1: 振り分けの正解率 0.793, 学習 34 s
+  freq seed 0 d16 T4: 振り分けの正解率 0.937, 学習 64 s
+  freq seed 0 d16 T2: 振り分けの正解率 0.879, 学習 63 s
+  freq seed 0 d16 T1: 振り分けの正解率 0.801, 学習 62 s
+freq seed 0 K=4
+all-conf             acc 0.923  route1 None  FFT 1056 (100.0%)  ms 0.247  params+ 0
+all-jcal             acc 0.928  route1 None  FFT 1056 (100.0%)  ms 0.247  params+ 0
+R2-d8T8-top1         acc 0.916  route1 0.93  FFT 400 (37.9%)  ms 0.100  params+ 1029
+R2-d8T8-top2-jcal    acc 0.939  route1 0.93  FFT 664 (62.9%)  ms 0.157  params+ 1029
+R2-d8T4-top1         acc 0.908  route1 0.921  FFT 332 (31.4%)  ms 0.088  params+ 1029
+R2-d8T4-top2-jcal    acc 0.940  route1 0.921  FFT 596 (56.4%)  ms 0.147  params+ 1029
+R2-d8T2-top1         acc 0.863  route1 0.874  FFT 298 (28.2%)  ms 0.123  params+ 1029
+R2-d8T2-top2-jcal    acc 0.924  route1 0.874  FFT 562 (53.2%)  ms 0.147  params+ 1029
+R2-d8T1-top1         acc 0.782  route1 0.793  FFT 281 (26.6%)  ms 0.093  params+ 1029
+R2-d8T1-top2-jcal    acc 0.885  route1 0.793  FFT 545 (51.6%)  ms 0.148  params+ 1029
+R2-d16T4-top1        acc 0.921  route1 0.937  FFT 396 (37.5%)  ms 0.110  params+ 2053
+R2-d16T4-top2-jcal   acc 0.936  route1 0.937  FFT 660 (62.5%)  ms 0.168  params+ 2053
+R2-d16T2-top1        acc 0.866  route1 0.879  FFT 330 (31.2%)  ms 0.136  params+ 2053
+R2-d16T2-top2-jcal   acc 0.920  route1 0.879  FFT 594 (56.2%)  ms 0.169  params+ 2053
+R2-d16T1-top1        acc 0.789  route1 0.801  FFT 297 (28.1%)  ms 0.111  params+ 2053
+R2-d16T1-top2-jcal   acc 0.892  route1 0.801  FFT 561 (53.1%)  ms 0.167  params+ 2053

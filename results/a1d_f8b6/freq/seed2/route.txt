@@ -1,0 +1,5 @@
+freq seed 2  前段 8 枚 + 後段 6 枚  後段単独 ['0.996', '0.968', '0.980', '0.968']  学習する数 4169
+shared-all-conf    acc 0.917  route1 None  FFT 544 (51.5%)  ms None
+shared-all-jcal    acc 0.934  route1 None  FFT 544 (51.5%)  ms None
+shared-top1        acc 0.925  route1 0.9430000185966492  FFT 240 (22.7%)  ms 0.06009710000944324
+shared-top2-jcal   acc 0.942  route1 0.9430000185966492  FFT 344 (32.6%)  ms 0.08388000002014451

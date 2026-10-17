@@ -1,0 +1,17 @@
+order seed 2 K=4
+all-conf             acc 0.969  route1 None  FFT 1056 (100.0%)  ms 0.246  params+ 0
+all-jcal             acc 0.955  route1 None  FFT 1056 (100.0%)  ms 0.246  params+ 0
+R2-d8T8-top1         acc 0.937  route1 0.937  FFT 400 (37.9%)  ms 0.115  params+ 1029
+R2-d8T8-top2-jcal    acc 0.989  route1 0.937  FFT 664 (62.9%)  ms 0.176  params+ 1029
+R2-d8T4-top1         acc 0.656  route1 0.656  FFT 332 (31.4%)  ms 0.099  params+ 1029
+R2-d8T4-top2-jcal    acc 0.891  route1 0.656  FFT 596 (56.4%)  ms 0.157  params+ 1029
+R2-d8T2-top1         acc 0.415  route1 0.415  FFT 298 (28.2%)  ms 0.085  params+ 1029
+R2-d8T2-top2-jcal    acc 0.724  route1 0.415  FFT 562 (53.2%)  ms 0.147  params+ 1029
+R2-d8T1-top1         acc 0.449  route1 0.449  FFT 281 (26.6%)  ms 0.090  params+ 1029
+R2-d8T1-top2-jcal    acc 0.722  route1 0.449  FFT 545 (51.6%)  ms 0.149  params+ 1029
+R2-d16T4-top1        acc 0.651  route1 0.651  FFT 396 (37.5%)  ms 0.127  params+ 2053
+R2-d16T4-top2-jcal   acc 0.887  route1 0.651  FFT 660 (62.5%)  ms 0.186  params+ 2053
+R2-d16T2-top1        acc 0.410  route1 0.41  FFT 330 (31.2%)  ms 0.137  params+ 2053
+R2-d16T2-top2-jcal   acc 0.682  route1 0.41  FFT 594 (56.2%)  ms 0.166  params+ 2053
+R2-d16T1-top1        acc 0.416  route1 0.416  FFT 297 (28.1%)  ms 0.108  params+ 2053
+R2-d16T1-top2-jcal   acc 0.705  route1 0.416  FFT 561 (53.1%)  ms 0.166  params+ 2053

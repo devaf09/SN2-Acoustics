@@ -1,0 +1,5 @@
+order seed 2  前段 8 枚 + 後段 6 枚  後段単独 ['1.000', '1.000', '1.000', '1.000']  学習する数 4169
+shared-all-conf    acc 0.947  route1 None  FFT 544 (51.5%)  ms None
+shared-all-jcal    acc 0.956  route1 None  FFT 544 (51.5%)  ms None
+shared-top1        acc 0.922  route1 0.921999990940094  FFT 240 (22.7%)  ms 0.07806790000176989
+shared-top2-jcal   acc 0.986  route1 0.921999990940094  FFT 344 (32.6%)  ms 0.08430149999912828
