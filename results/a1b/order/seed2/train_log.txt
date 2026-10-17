@@ -1,0 +1,4 @@
+seed 2 expert 0: own [0, 1, 2, 3], train 500, test 250, steps 1500, 単独の正解率 1.0000, 92 s, threads 12, device cuda
+seed 2 expert 1: own [4, 5, 6, 7], train 500, test 250, steps 1500, 単独の正解率 1.0000, 92 s, threads 12, device cuda
+seed 2 expert 2: own [8, 9, 10, 11], train 500, test 250, steps 1500, 単独の正解率 1.0000, 90 s, threads 12, device cuda
+seed 2 expert 3: own [12, 13, 14, 15], train 500, test 250, steps 1500, 単独の正解率 1.0000, 90 s, threads 12, device cuda

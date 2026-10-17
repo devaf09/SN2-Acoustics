@@ -3,8 +3,8 @@
 task_skills(4, seed) の専門家 i はクラス 4i..4i+3 を担当（窓は全部で 16）。
 2 専門家の比較には、このうち 0 番と 1 番をそのまま使う（task_skills(2, seed) と同じデータになる）。
 
-使い方: python experiments/a1_experts.py --seed 0 [--steps 1500] [--threads 4]
-保存先: results/a1/seed{seed}/expert{i}.pt と train_log.txt
+使い方: python experiments/a1_experts.py --seed 0 [--steps 1500] [--threads 4] [--device cuda] [--task freq|order]
+保存先: results/a1/seed{seed}/（task=freq）または results/a1b/order/seed{seed}/（task=order）の expert{i}.pt と train_log.txt
 """
 from __future__ import annotations
 
@@ -26,13 +26,16 @@ ap.add_argument("--steps", type=int, default=1500)
 ap.add_argument("--threads", type=int, default=0)
 ap.add_argument("--K", type=int, default=4)
 ap.add_argument("--device", default="cpu")
+ap.add_argument("--task", default="freq", help="freq（A1、task_skills）/ order（A1b、順序だけで決まる課題）")
 a = ap.parse_args()
 if a.threads:
     torch.set_num_threads(a.threads)
 
-out = os.path.join(ROOT, "results", "a1", f"seed{a.seed}")
+sub = ("a1",) if a.task == "freq" else ("a1b", a.task)
+out = os.path.join(ROOT, "results", *sub, f"seed{a.seed}")
 os.makedirs(out, exist_ok=True)
-skills = task_skills(a.K, seed=a.seed)
+from sn2_tasks import get_skills
+skills = [(tr, te) for tr, te, _ in get_skills(a.task, a.K, a.seed)]
 C = a.K * 4
 log = open(os.path.join(out, "train_log.txt"), "a", encoding="utf-8")
 for i, ((xtr, ytr), (xte, yte)) in enumerate(skills):
