@@ -1,0 +1,6 @@
+torch 2.14.1+cu126, device=cuda, threads=12, cpu=Intel64 Family 6 Model 151 Stepping 2, GenuineIntel, CUDA_VISIBLE_DEVICES=None
+学習する数: 2065
+学習 1 ステップ（バッチ 256）: 中央値 60 ms（最小 58, 最大 61）
+推論 1 入力（符号化を除く）: 中央値 4.08 ms
+推論 1 入力（符号化を含む）: 中央値 5.22 ms
+推論 256 入力まとめて: 5 ms（1 入力あたり 0.02 ms）
