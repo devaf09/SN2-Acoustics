@@ -32,47 +32,65 @@
 | 振り分け役「水面の板」（レンズの後の明るさだけを見る） | 26.3%（偶然と同じ） | 93.2% | 25.8% |
 | **前半の板を振り分け役と専門家で共有し、上位 2 人だけ動かす** | **98.3%** | **94.2%** | **32.6%** |
 
-わかったこと（くわしくは [NOTES.md](NOTES.md)）:
+わかったこと（くわしくは、やさしい説明の [docs/experiments_guide.md](docs/experiments_guide.md)、研究ノートの [NOTES.md](NOTES.md)）:
 
-- **前半の板の共有が一番効いた**（実験 A1d）。振り分けのために学習した板 8 枚を、そのまま全員共通の前半として使い、専門家はそれぞれ後半の板 6 枚だけを持つ。全員を動かす一番良い方式と同じ以上の正解率を、約 1/3 の計算で出せた。
-- レンズの後の明るさだけを見る振り分け役は、文字の**頻度**は分かるが、文字の**並び順**は原理的に分からない（実験 A1b）。
-- 振り分け役の計算を減らすために、光の「色の数」を減らすと、並び順の情報が消えてしまった（実験 A1c）。
-- 専門家を**後から 1 人足す**こと、外して**完全に元に戻す**ことはできた。ただし並び順の課題では、新しい専門家への振り分けがうまくいかず、全員を動かす方式に負けた（実験 A1e）。
+- **前半の板の共有が一番効いた**（実験04）。振り分けのために学習した板 8 枚を、そのまま全員共通の前半として使い、専門家はそれぞれ後半の板 6 枚だけを持つ。全員を動かす一番良い方式と同じ以上の正解率を、約 1/3 の計算で出せた。
+- レンズの後の明るさだけを見る振り分け役は、文字の**頻度**は分かるが、文字の**並び順**は原理的に分からない（実験02）。
+- 振り分け役の計算を減らすために、光の「色の数」を減らすと、並び順の情報が消えてしまった（実験03）。
+- 専門家を**後から 1 人足す**こと、外して**完全に元に戻す**ことはできた。ただし並び順の課題では、新しい専門家への振り分けがうまくいかず、全員を動かす方式に負けた（実験05）。
 - まだ達成できていないこと: 振り分けの正解率 95%（今は 91〜94%）。本物のデータでの確認。
 
-目標と今の到達度の表は [docs/scoreboard.md](docs/scoreboard.md) にあります。
+![計算量と正解率](docs/images/exp02_04_accuracy_vs_compute.png)
+
+目標への到達度は、ポイント表 [docs/scoreboard.md](docs/scoreboard.md) にあります（今 **83.5 / 100 点**。2 次元の入力の 10 点は未測定）。
 
 ## ファイルの配置
 
 | 場所 | 中身 |
 |---|---|
+| [docs/experiments_guide.md](docs/experiments_guide.md) | 実験の歩み（高校生が追える言葉で、実験ごとに目的・方法・結果・得られたもの・問題点） |
 | [NOTES.md](NOTES.md) | 実験ノート（研究者向け。数字の正本。冒頭に「現時点のまとめ」） |
-| [docs/scoreboard.md](docs/scoreboard.md) | 目標と到達度の表 |
+| [docs/scoreboard.md](docs/scoreboard.md) | 目標への到達度（ポイント表）。`tools/scoreboard.py` が作る |
 | [docs/module_map_plan.md](docs/module_map_plan.md) | グレインの配置と繋がりを地図で表し、組み立てるツールの検討メモ（まだ作っていない） |
-| `experiments/` | 実験のプログラム。`a1_*`＝実験 A1、`a1b_*`＝A1b … `a1e_*`＝A1e。`sn2_tasks.py` は合成課題 |
-| `results/` | 実験の生の出力（JSON・ログ）と、学習済みの専門家（`.pt`） |
+| `experiments/expNN_名前.py` | 実験のプログラム（NN = 実験番号）。`sn2_tasks.py` は合成課題、`sn2_io.py` は結果の書き出し |
+| `experiments/sweeps/sweepNN.sh` | その実験で回した条件の一覧（そのまま再実行できる） |
+| `results/expNN.txt` | 結果（1 回の実行 = 1 行の JSON）。`results/models/` は学習済みの専門家、`results/legacy/` は形式をそろえる前の元のファイル |
+| `tools/` | 集計（`summarize.py`）、図（`make_figures.py`、`docs/images/` に書き出す）、ポイント表（`scoreboard.py`） |
 | `vendor/` | Sin-CNN2 から写した SinWave 本体と課題（MIT、出典は [vendor/README.md](vendor/README.md)） |
+
+実験番号は、記録をそろえる前の名前（A1〜A1e）から付け直しました: A1 → 01、A1b → 02、A1c → 03、A1d → 04、A1e → 05。
 
 ## 動かし方
 
-必要なもの: Python 3.10 以上と PyTorch（GPU があると速い。CPU でも動くが、専門家 1 人の学習に約 13 分かかる。GPU（RTX 3060）では約 90 秒）。
+必要なもの: Python 3.10 以上、PyTorch（GPU があると速い。CPU でも動くが、専門家 1 人の学習に約 13 分かかる。GPU（RTX 3060）では約 90 秒）、図を作るなら matplotlib。
 
 リポジトリの一番上のフォルダで、たとえば次のように実行します。
 
 ```bash
-python experiments/time_expert.py --device cuda
+python experiments/exp01_time.py --device cuda
 ```
 
 ```bash
-python experiments/a1_experts.py --task order --seed 0 --device cuda
+python experiments/exp01_experts.py --task order --seed 0 --device cuda
 ```
 
 ```bash
-python experiments/a1d_shared.py --task order --seed 0 --back 6 --device cuda
+python experiments/exp04_shared_front.py --task order --seed 0 --back 6 --device cuda
 ```
 
-1 つ目は専門家 1 人の時間の計測、2 つ目は順序課題の専門家 4 人の学習、3 つ目は前半の板を共有する実験 A1d です。
-結果は `results/` に書き出されます。データはプログラムの中で作るので、ダウンロードは要りません。
+1 つ目は専門家 1 人の時間の計測、2 つ目は並び順の課題の専門家 4 人の学習、3 つ目は前半の板を共有する実験04 です。
+結果は `results/expNN.txt` に 1 行ずつ足されます。実験全体をやり直すときは `bash experiments/sweeps/sweep01.sh` のように実行します。
+集計と図は次のとおりです。
+
+```bash
+python tools/summarize.py
+```
+
+```bash
+python tools/make_figures.py
+```
+
+データはプログラムの中で作るので、ダウンロードは要りません。
 
 ## ライセンス
 

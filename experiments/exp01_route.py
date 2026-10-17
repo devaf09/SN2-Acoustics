@@ -1,4 +1,4 @@
-"""実験 A1 の 2 段目: 学習済みの専門家（a1_experts.py）に、振り分け役を付けて比べる。
+"""実験01（旧 A1）の 2 段目: 学習済みの専門家（a1_experts.py）に、振り分け役を付けて比べる。
 
 比べるもの（K = 4 人と 2 人）
   all-avg   : 全員を動かして足す（sw.merge。スコアの平均で全クラスから最大）
@@ -14,7 +14,9 @@
 で全クラスから最大のものを答える。
 
 使い方: python experiments/a1_route.py --seed 0 [--steps 1500] [--threads 4]
-出力: results/a1/seed{seed}/route.json と route.txt
+着想: Sin-CNN2 の融合（全員を動かして足す）は計算が専門家の数だけ増える。担当だけを動かす「振り分け役」で計算を減らせるか（コーディネーターの到達点 A の案）。
+専門家は exp01_experts.py で先に学習しておく（results/models/freq/seed*/）。
+出力: results/exp01.txt に 1 行の JSON を追記（part="route"）
 """
 from __future__ import annotations
 
@@ -34,6 +36,7 @@ import torch.nn.functional as F
 
 from vendor import sinwave_minimal_v1_1_0 as sw
 from vendor.sinwave_tasks import task_skills
+from sn2_io import append_result, models_dir, device_name
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--seed", type=int, default=0)
@@ -41,11 +44,13 @@ ap.add_argument("--steps", type=int, default=1500)
 ap.add_argument("--threads", type=int, default=0)
 ap.add_argument("--Ks", default="4,2")
 ap.add_argument("--device", default="cpu")
+ap.add_argument("--out", default=None, help="結果の 1 行 JSON の追記先（既定は results/expNN.txt）")
 a = ap.parse_args()
+T_START = time.time()
 if a.threads:
     torch.set_num_threads(a.threads)
 torch.manual_seed(a.seed)
-D = os.path.join(ROOT, "results", "a1", f"seed{a.seed}")
+D = models_dir("freq", a.seed)
 DEV = a.device
 experts_all = [sw.load(os.path.join(D, f"expert{i}.pt"), device=DEV) for i in range(4)]
 for e in experts_all:
@@ -276,8 +281,9 @@ def run(K):
 out = {"seed": a.seed, "steps": a.steps, "threads": torch.get_num_threads(), "device": DEV,
        "device_name": torch.cuda.get_device_name() if DEV != "cpu" else "cpu",
        "runs": [run(int(k)) for k in a.Ks.split(",")]}
-with open(os.path.join(D, "route.json"), "w", encoding="utf-8") as f:
-    json.dump(out, f, ensure_ascii=False, indent=1)
+append_result("01", {"part": "route", "script": os.path.basename(__file__), "args": vars(a), "task": "freq",
+                     "seed": a.seed, "device_name": device_name(DEV), **{k: v for k, v in out.items() if k not in ("seed", "device", "device_name")},
+                     "sec": round(time.time() - T_START, 1)}, a.out)
 lines = []
 for rr in out["runs"]:
     lines.append(f"seed {a.seed}  K={rr['K']}  test {rr['n_test']}  専門家単独 {['%.3f' % s for s in rr['solo']]}  "
@@ -291,5 +297,3 @@ for rr in out["runs"]:
     lines.append("")
 txt = "\n".join(lines)
 print(txt)
-with open(os.path.join(D, "route.txt"), "w", encoding="utf-8") as f:
-    f.write(txt + "\n")

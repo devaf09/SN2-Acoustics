@@ -1,4 +1,4 @@
-"""実験 A1e: 共通の前段（A1d）を凍結したまま、後から 5 人目の専門家（新しい 4 クラス）を足す。取消も確かめる。
+"""実験05（旧 A1e）: 共通の前段（A1d）を凍結したまま、後から 5 人目の専門家（新しい 4 クラス）を足す。取消も確かめる。
 
 手順（seed ごと）
 1. A1d と同じに作る: 振り分け役（板 8 枚・区画 64、T=8、窓 4）を専門家 0〜3 のデータだけで学習 → 凍結して共通の前段に。
@@ -15,7 +15,8 @@
 計算量は、元の専門家 5 人を全員動かす（5 × 264 = 1320 回）を 100% とする。
 
 使い方: python experiments/a1e_add.py --task order --seed 0 --device cuda
-出力: results/a1e/{task}/seed{seed}/route.json と route.txt
+着想: 実験04 で前段を共有すると、前段は「全専門家に共通の言葉」になる。前段の振り分けを学習したときに居なかった専門家を、後から足せるか（コーディネーターの案）。
+出力: results/exp05.txt に 1 行の JSON を追記
 """
 from __future__ import annotations
 
@@ -33,6 +34,7 @@ import torch.nn.functional as F
 
 from vendor import sinwave_minimal_v1_1_0 as sw
 from sn2_tasks import get_skills
+from sn2_io import append_result, models_dir, device_name
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--task", default="order")
@@ -40,12 +42,12 @@ ap.add_argument("--seed", type=int, default=0)
 ap.add_argument("--steps", type=int, default=1500)
 ap.add_argument("--back", type=int, default=6)
 ap.add_argument("--device", default="cpu")
+ap.add_argument("--out", default=None, help="結果の 1 行 JSON の追記先（既定は results/expNN.txt）")
 a = ap.parse_args()
+T_START = time.time()
 DEV = a.device
 torch.manual_seed(a.seed)
-OUT = os.path.join(ROOT, "results", "a1e", a.task, f"seed{a.seed}")
-os.makedirs(OUT, exist_ok=True)
-EXP_DIR = os.path.join(ROOT, "results", "a1" if a.task == "freq" else os.path.join("a1b", a.task), f"seed{a.seed}")
+EXP_DIR = models_dir(a.task, a.seed)
 K5 = 5
 skills = get_skills(a.task, K5, a.seed)
 
@@ -301,7 +303,7 @@ for v in res.values():
 
 out = {"task": a.task, "seed": a.seed, "steps": a.steps, "back": a.back, "log": log,
        "params_new": {"back5": sum(p.numel() for p in backs[4].parameters()), "exit5": router.L + 2}, "results": res}
-json.dump(out, open(os.path.join(OUT, "route.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+append_result("05", {"script": os.path.basename(__file__), "args": vars(a), "device_name": device_name(DEV), **out,
+                     "sec": round(time.time() - T_START, 1)}, a.out)
 txt = json.dumps(res, ensure_ascii=False, indent=1)
 print(txt)
-open(os.path.join(OUT, "route.txt"), "w", encoding="utf-8").write("\n".join(log) + "\n" + txt + "\n")

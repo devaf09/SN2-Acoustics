@@ -1,4 +1,4 @@
-"""実験 A1b: 振り分け役の比較を「順序だけで決まる課題」で行う。あわせて、上位 2 人を動かしても伸びない問題（A1 の問題点 3）を
+"""実験02（旧 A1b）: 振り分け役の比較を「順序だけで決まる課題」で行う。あわせて、上位 2 人を動かしても伸びない問題（A1 の問題点 3）を
 検証用データでの較正で確かめる。task=freq（A1 と同じ課題・同じ専門家）でも動く。
 
 比べるもの（K = 4 人と 2 人）
@@ -17,7 +17,9 @@
   jcal : α、τ_k、b_k を検証用データでまとめて合わせる（専門家は生の点数 S_k/τ_k + b_k、全クラスでの交差エントロピー）
 
 使い方: python experiments/a1b_route.py --task order --seed 0 --device cuda
-出力: results/a1b/{task}/seed{seed}/route.json と route.txt
+着想: 実験01 の課題は文字の頻度だけで解けた。順序だけで決まる課題で振り分け役の本当の力を測り、上位 2 人で伸びない問題を較正で確かめる（コーディネーターの案）。
+専門家: results/models/{task}/seed*/（order は exp01_experts.py --task order で学習）。
+出力: results/exp02.txt に 1 行の JSON を追記
 """
 from __future__ import annotations
 
@@ -35,6 +37,7 @@ import torch.nn.functional as F
 
 from vendor import sinwave_minimal_v1_1_0 as sw
 from sn2_tasks import get_skills
+from sn2_io import append_result, models_dir, device_name
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--task", default="order")
@@ -42,12 +45,12 @@ ap.add_argument("--seed", type=int, default=0)
 ap.add_argument("--steps", type=int, default=1500)
 ap.add_argument("--Ks", default="4,2")
 ap.add_argument("--device", default="cpu")
+ap.add_argument("--out", default=None, help="結果の 1 行 JSON の追記先（既定は results/expNN.txt）")
 a = ap.parse_args()
+T_START = time.time()
 DEV = a.device
 torch.manual_seed(a.seed)
-EXP_DIR = os.path.join(ROOT, "results", "a1" if a.task == "freq" else os.path.join("a1b", a.task), f"seed{a.seed}")
-OUT = os.path.join(ROOT, "results", "a1b", a.task, f"seed{a.seed}")
-os.makedirs(OUT, exist_ok=True)
+EXP_DIR = models_dir(a.task, a.seed)
 experts_all = [sw.load(os.path.join(EXP_DIR, f"expert{i}.pt"), device=DEV).eval() for i in range(4)]
 skills_all = get_skills(a.task, 4, a.seed)
 E0 = experts_all[0]
@@ -330,8 +333,8 @@ def run(K):
 out = {"task": a.task, "seed": a.seed, "steps": a.steps, "device": DEV,
        "device_name": torch.cuda.get_device_name() if DEV != "cpu" else "cpu",
        "runs": [run(int(k)) for k in a.Ks.split(",")]}
-with open(os.path.join(OUT, "route.json"), "w", encoding="utf-8") as f:
-    json.dump(out, f, ensure_ascii=False, indent=1)
+append_result("02", {"script": os.path.basename(__file__), "args": vars(a), "device_name": device_name(DEV),
+                     **{k: v for k, v in out.items() if k not in ("device", "device_name")}, "sec": round(time.time() - T_START, 1)}, a.out)
 lines = []
 for rr in out["runs"]:
     lines.append(f"{a.task} seed {a.seed}  K={rr['K']}  test {rr['n_test']}  専門家単独 {['%.3f' % s for s in rr['solo']]}  "
@@ -343,5 +346,3 @@ for rr in out["runs"]:
     lines.append("")
 txt = "\n".join(lines)
 print(txt)
-with open(os.path.join(OUT, "route.txt"), "w", encoding="utf-8") as f:
-    f.write(txt + "\n")

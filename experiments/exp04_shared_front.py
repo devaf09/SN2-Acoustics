@@ -1,4 +1,4 @@
-"""実験 A1d: 振り分け役と専門家で、前半の板を共有する。
+"""実験04（旧 A1d）: 振り分け役と専門家で、前半の板を共有する。
 
 1. 振り分け役 R（SinWaveNet、板 8 枚・区画 64、T=8、窓 = 専門家の数）を全員のデータで「どの専門家か」学習する。
 2. R の板 8 枚を「共通の前段」として凍結する。前段を出た光は、
@@ -11,7 +11,8 @@ FFT 回数（1 入力）: 前段 2·8·T = 128、振り分けのレンズ T = 8�
 比べる相手: A1b・A1c と同じ、元の専門家（板 16 枚）を全員動かして「自信で選ぶ」「較正して最大」。
 
 使い方: python experiments/a1d_shared.py --task order --seed 0 --device cuda
-出力: results/a1d/{task}/seed{seed}/route.json と route.txt（前段 8・後段 8 以外は results/a1d_f{前段}b{後段}/...）
+着想: 実験03 で色の数を減らすと順序の情報が消えた。振り分けのための計算を、専門家の計算の一部として使い回せば無駄にならない（実験02 の「次の案」）。
+出力: results/exp04.txt に 1 行の JSON を追記
 """
 from __future__ import annotations
 
@@ -29,6 +30,7 @@ import torch.nn.functional as F
 
 from vendor import sinwave_minimal_v1_1_0 as sw
 from sn2_tasks import get_skills
+from sn2_io import append_result, device_name
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--task", default="order")
@@ -37,11 +39,11 @@ ap.add_argument("--steps", type=int, default=1500)
 ap.add_argument("--front", type=int, default=8)
 ap.add_argument("--back", type=int, default=8)
 ap.add_argument("--device", default="cpu")
+ap.add_argument("--out", default=None, help="結果の 1 行 JSON の追記先（既定は results/expNN.txt）")
 a = ap.parse_args()
+T_START = time.time()
 DEV = a.device
 torch.manual_seed(a.seed)
-OUT = os.path.join(ROOT, "results", "a1d" if (a.front, a.back) == (8, 8) else f"a1d_f{a.front}b{a.back}", a.task, f"seed{a.seed}")
-os.makedirs(OUT, exist_ok=True)
 K, C = 4, 16
 skills = get_skills(a.task, K, a.seed)
 
@@ -202,10 +204,10 @@ for v in res.values():
 params = sum(p.numel() for p in router.parameters()) + sum(p.numel() for n in backs for p in n.parameters())
 out = {"task": a.task, "seed": a.seed, "steps": a.steps, "front": a.front, "back": a.back, "solo": solo, "params": params,
        "fft_full": FFT_FULL, "log": log, "results": res}
-json.dump(out, open(os.path.join(OUT, "route.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+append_result("04", {"script": os.path.basename(__file__), "args": vars(a), "device_name": device_name(DEV), **out,
+                     "sec": round(time.time() - T_START, 1)}, a.out)
 lines = [f"{a.task} seed {a.seed}  前段 {a.front} 枚 + 後段 {a.back} 枚  後段単独 {['%.3f' % s for s in solo]}  学習する数 {params}"]
 for k, v in res.items():
     lines.append(f"{k:18s} acc {v['acc']:.3f}  route1 {v['route_top1']}  FFT {v['ffts']} ({v['ffts_pct']:.1f}%)  ms {v.get('ms')}")
 txt = "\n".join(lines)
 print(txt)
-open(os.path.join(OUT, "route.txt"), "w", encoding="utf-8").write(txt + "\n")

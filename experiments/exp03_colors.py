@@ -1,4 +1,4 @@
-"""実験 A1c: 振り分け役 R2（薄い SinWave）だけ色の数 T を減らし、計算量を下げる。専門家は T=8 のまま。
+"""実験03（旧 A1c）: 振り分け役 R2（薄い SinWave）だけ色の数 T を減らし、計算量を下げる。専門家は T=8 のまま。
 
 振り分け役は自分の T で文字列を光にする（同じ文字列、色の標本だけ少ない光源）。FFT 回数 = T_r·(2·板の数 + 1)。
 T=1 の虹は、全部の文字を干渉させる coh と同じになる。
@@ -6,7 +6,8 @@ T=1 の虹は、全部の文字を干渉させる coh と同じになる。
 答え方: 上位 1 人（較正は答えを変えない）と、上位 2 人 + 較正 jcal（A1b と同じ式）。
 
 使い方: python experiments/a1c_route.py --task order --seed 0 --device cuda
-出力: results/a1c/{task}/seed{seed}/route.json と route.txt
+着想: 実験02 で順序を見分けられたのは薄い SinWave（R2）だけだが、板 8 枚で計算量 37.9% と目標（35%）を少し超えた。色の数 T を減らして計算を減らせるか（実験02 の「次の案」）。
+出力: results/exp03.txt に 1 行の JSON を追記
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ import torch.nn.functional as F
 
 from vendor import sinwave_minimal_v1_1_0 as sw
 from sn2_tasks import get_skills
+from sn2_io import append_result, models_dir, device_name
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--task", default="order")
@@ -30,12 +32,12 @@ ap.add_argument("--seed", type=int, default=0)
 ap.add_argument("--steps", type=int, default=1500)
 ap.add_argument("--device", default="cpu")
 ap.add_argument("--configs", default="8:8,8:4,8:2,8:1,16:4,16:2,16:1", help="板の数:T の並び")
+ap.add_argument("--out", default=None, help="結果の 1 行 JSON の追記先（既定は results/expNN.txt）")
 a = ap.parse_args()
+T_START = time.time()
 DEV = a.device
 torch.manual_seed(a.seed)
-EXP_DIR = os.path.join(ROOT, "results", "a1" if a.task == "freq" else os.path.join("a1b", a.task), f"seed{a.seed}")
-OUT = os.path.join(ROOT, "results", "a1c", a.task, f"seed{a.seed}")
-os.makedirs(OUT, exist_ok=True)
+EXP_DIR = models_dir(a.task, a.seed)
 K = 4
 experts = [sw.load(os.path.join(EXP_DIR, f"expert{i}.pt"), device=DEV).eval() for i in range(K)]
 skills = get_skills(a.task, K, a.seed)
@@ -150,13 +152,12 @@ for cfg in a.configs.split(","):
     print(f"  {a.task} seed {a.seed} d{d} T{Tr}: 振り分けの正解率 {res[f'R2-d{d}T{Tr}-top1']['route_top1']:.3f}, "
           f"学習 {t_train:.0f} s", flush=True)
 
-out = {"task": a.task, "seed": a.seed, "steps": a.steps, "device_name": torch.cuda.get_device_name() if DEV != "cpu" else "cpu",
+out = {"task": a.task, "seed": a.seed, "steps": a.steps, "device_name": device_name(DEV),
        "K": K, "fft_per_expert": FFT_EXPERT, "results": res}
-json.dump(out, open(os.path.join(OUT, "route.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+append_result("03", {"script": os.path.basename(__file__), "args": vars(a), **out, "sec": round(time.time() - T_START, 1)}, a.out)
 lines = [f"{a.task} seed {a.seed} K={K}"]
 for k, v in res.items():
     lines.append(f"{k:20s} acc {v['acc']:.3f}  route1 {v['route_top1'] if v['route_top1'] is None else round(v['route_top1'], 3)}  "
                  f"FFT {v['ffts']} ({v['ffts_pct']:.1f}%)  ms {v['ms']:.3f}  params+ {v['extra_params']}")
 txt = "\n".join(lines)
 print(txt)
-open(os.path.join(OUT, "route.txt"), "w", encoding="utf-8").write(txt + "\n")
