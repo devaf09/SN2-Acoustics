@@ -1,0 +1,631 @@
+# vendored from SN2-Parts-2D (devaf09/SN2-Parts-2D), file sn2_parts_2d.py v0.11.0
+# source commit: 5238c39 (last commit touching the file; SN2-Parts-2D HEAD 60f44e7 at copy time). copied 2026-10-26. Do not edit; re-vendor instead.
+"""sn2_parts_2d.py — 2 次元の場を正弦の板と回折で処理する部品（単独で動く 1 ファイル版）
+
+Sin-CNN2 の SinWave（1 次元の光の場、https://github.com/devaf09/Sin-CNN2）を 2 次元（Ly × Lx の場）へ広げるための部品集です。
+依存は PyTorch のみ。部品は関数として独立させ、組み合わせて使います。
+
+    import sn2_parts_2d as p2
+    y, x = p2.grid(64, 64)
+    pid = p2.patch_index(64, 64, 4, 4)                       # 4 × 4 の区画
+    ph = p2.plate_stripes(A, wx, wy, phi, pid, y, x)         # ② 斜めの縞の板の位相の遅れ (64, 64)
+    H = p2.transfer(64, 64, z=64.0)                          # 板の間隔 64 画素の回折
+    u = p2.normalize(p2.propagate(p2.apply_plate(u, ph), H)) # 板 → 回折 → 明るさを平均 1 に
+    I = p2.intensity(p2.lens(u))                             # レンズの後のスクリーンの明るさ
+
+しくみ（光の実験装置に例えると）
+    入力 → 2 次元の光の場 → [Sin の板 → 回折 → 明るさを平均 1 に] × 枚数 → レンズ → スクリーンの窓 → 答え
+
+板の 3 つの形（どれも「位相の遅れ」の模様。区画ごとに振幅 A・初期位相 φ などを持つ）
+    ① 交点で掛け算（plate_xy）  : A1·sin(ωx·x + φ1) + A2·sin(ωy·y + φ2)。位相の和 = 波の掛け算なので、
+                                  入力も X × Y の掛け算の形なら、2 次元の計算が 1 次元の計算 2 本に分かれる（*_sep の関数）
+    ② 斜めの縞（plate_stripes）  : A·sin(ωx·x + ωy·y + φ)
+    ③ 波紋（plate_ripple）       : A·sin(k·r + φ)（等間隔の輪、アキシコン）または A·sin(k·r² + φ)（ゾーンプレート）。
+                                  r は中心 (cx, cy)・楕円の軸 a, b・角度 θ で決まる距離。中心を遠くへ置くと ② になる
+
+変更履歴（改良したらここを更新し、__version__ を上げる）
+    0.11.0 (2026-10-20) train(log_every=..., log_fn=...): 学習の経過を net.history に記録する（持ち主の依頼。図は tools/fig_history.py）。
+    0.10.0 (2026-10-20) 画像認識の区切り。読み方の部品: code_scores・prototype_codes（符号で読む、実験22・23）、parts_scores（部品の窓、実験26）、
+                        Correlator4f（4f 系の光学相関器と光の非線形をはさんだ 2 段、どこに何があるかを出す、実験27〜30）。
+    0.9.0 (2026-10-19)  train(schedule="cosine"): 学習率を最後に 0 まで下げる（実験17・21 で学習の谷が消える。推奨）。
+    0.8.0 (2026-10-19)  Net2D(sinc_centers=...): ④⑤ の波紋の中心の初期配置（でたらめ・格子・格子 + ずらし）。
+    0.7.0 (2026-10-18)  ⑤ 楕円で大きさを変えられる減衰する波紋 plate_sinc_ellipse（持ち主の案）と Net2D の "sinc_e"。
+                        Net2D(sinc_depth=...) で ④ の初期の深さを変えられる。
+    0.6.0 (2026-10-18)  融合のための「担当なし」の学習: generic_images と train(reject=...)（実験10。足すだけの融合 80.8 → 100%）。
+    0.5.0 (2026-10-18)  ④ 減衰する波紋の板 plate_sinc（持ち主の案。深さ・幅・中心だけで決まる波紋を板 1 枚に複数）と Net2D の "sinc"。
+    0.4.0 (2026-10-18)  組み立て: merge（並列光路の融合・取消）、derive・combine（共通の出発点からの足し算・引き算）。
+    0.3.0 (2026-10-18)  2 次元の照明 illumination（tilt・アダマール。区画どうしの干渉を消す）と Net2D(illum=...) を追加。
+    0.2.0 (2026-10-17)  入力 image_to_field（振幅として・位相として）、1 本の光路 Net2D（板の形を 1 枚ごとに選べる）、
+                        train・evaluate を追加。window_grid はレンズの後の中心（入力の平均の明るさ）を避けて窓を置く。
+    0.1.0 (2026-10-17)  最初の版。格子、区画、板 ①②③ の位相、2 次元の回折（角スペクトル法・近軸）、レンズ、
+                        明るさの正規化、① の行と列に分けた計算、窓の読み出し。計算量は実験00 で測定。
+
+ライセンス: MIT
+"""
+from __future__ import annotations
+
+import math
+
+import torch
+
+__version__ = "0.11.0"
+
+
+# =============================================================================================
+# 1. 場の座標と区画
+# =============================================================================================
+
+def grid(Ly: int, Lx: int, device=None) -> tuple[torch.Tensor, torch.Tensor]:
+    """場の画素の座標。y は (Ly, 1)、x は (1, Lx) の形（足し算で (Ly, Lx) に広がる）。単位は画素。"""
+    y = torch.arange(Ly, dtype=torch.float32, device=device)[:, None]
+    x = torch.arange(Lx, dtype=torch.float32, device=device)[None, :]
+    return y, x
+
+
+def patch_index(Ly: int, Lx: int, py: int, px: int, device=None) -> torch.Tensor:
+    """場を縦 py × 横 px の格子の区画に分けたときの、各画素の区画番号 (Ly, Lx)。番号は 行 × px + 列。"""
+    iy = torch.arange(Ly, device=device) * py // Ly
+    ix = torch.arange(Lx, device=device) * px // Lx
+    return iy[:, None] * px + ix[None, :]
+
+
+def band_index(L: int, p: int, device=None) -> torch.Tensor:
+    """長さ L の 1 列を p 本の帯に分けたときの、各画素の帯の番号 (L,)。① の板の X 用・Y 用に使う。"""
+    return torch.arange(L, device=device) * p // L
+
+
+# =============================================================================================
+# 2. 板（位相の遅れの模様）
+# =============================================================================================
+# どの関数も「位相の遅れ」(Ly, Lx) または 1 次元の部品を返す。光に掛けるのは apply_plate。
+# 引数の A, φ などは区画ごとの値（学習する数）。ω・k・中心は固定にも学習にもできる（Sin-CNN2 では ω 固定でよかった）。
+
+def plate_xy_parts(Ax, wx, phix, bx, Ay, wy, phiy, by, x1, y1) -> tuple[torch.Tensor, torch.Tensor]:
+    """① 交点で掛け算の板を、X 用と Y 用の 1 次元の位相に分けて返す: (phase_y (Ly,), phase_x (Lx,))。
+    bx, by は band_index の帯の番号、x1, y1 は 1 次元の座標 (Lx,), (Ly,)。
+    2 次元の位相は phase_y[:, None] + phase_x[None, :]（plate_xy）。位相の和なので、光には exp の積として掛かる。"""
+    phase_x = Ax[bx] * torch.sin(wx[bx] * x1 + phix[bx])
+    phase_y = Ay[by] * torch.sin(wy[by] * y1 + phiy[by])
+    return phase_y, phase_x
+
+
+def plate_xy(Ax, wx, phix, bx, Ay, wy, phiy, by, x1, y1) -> torch.Tensor:
+    """① 交点で掛け算の板の位相 (Ly, Lx) = A1·sin(ωx·x + φ1) + A2·sin(ωy·y + φ2)（帯ごとに値を持つ）。"""
+    py_, px_ = plate_xy_parts(Ax, wx, phix, bx, Ay, wy, phiy, by, x1, y1)
+    return py_[:, None] + px_[None, :]
+
+
+def plate_stripes(A, wx, wy, phi, pid, y, x) -> torch.Tensor:
+    """② 斜めの縞の板の位相 (Ly, Lx) = A·sin(ωx·x + ωy·y + φ)。pid は patch_index の区画番号。"""
+    return A[pid] * torch.sin(wx[pid] * x + wy[pid] * y + phi[pid])
+
+
+def ripple_radius(cx, cy, a, b, theta, pid, y, x) -> torch.Tensor:
+    """③ 波紋の「距離」r (Ly, Lx)。区画ごとの中心 (cx, cy)（場の外でもよい）、楕円の軸 a, b、角度 θ。
+    r = √((x'/a)² + (y'/b)²)、(x', y') は中心から見た座標を θ だけ回したもの。"""
+    dx, dy = x - cx[pid], y - cy[pid]
+    c, s = torch.cos(theta[pid]), torch.sin(theta[pid])
+    xr, yr = c * dx + s * dy, -s * dx + c * dy
+    return torch.sqrt((xr / a[pid]) ** 2 + (yr / b[pid]) ** 2 + 1e-12)
+
+
+def plate_ripple(A, k, phi, cx, cy, a, b, theta, pid, y, x, power: int = 1) -> torch.Tensor:
+    """③ 波紋の板の位相 (Ly, Lx) = A·sin(k·r^power + φ)。
+    power=1: 等間隔の輪（円錐レンズ = アキシコンと同じ形）、power=2: 外ほど詰まる輪（ゾーンプレート = レンズと同じ形）。"""
+    r = ripple_radius(cx, cy, a, b, theta, pid, y, x)
+    return A[pid] * torch.sin(k[pid] * r ** power + phi[pid])
+
+
+def plate_sinc(A, k, cx, cy, y, x) -> torch.Tensor:
+    """④ 減衰する波紋の板（持ち主の案、2026-10-18）の位相 (Ly, Lx) = Σ_m A_m · sin(k_m·r_m) / (k_m·r_m)、r_m = 中心 (cx_m, cy_m) からの距離。
+    水面に石を落としたときのように、中心が一番深く、外へ行くほど浅くなる輪。区画には分けない。
+    波紋 1 つは「深さ A・幅（輪の細かさ）k・中心の位置 (cx, cy)」の 4 つの数だけで決まり、どれも学習できる。
+    A, k, cx, cy は (M,)（M = 波紋の数）。"""
+    r = torch.sqrt((x[None] - cx[:, None, None]) ** 2 + (y[None] - cy[:, None, None]) ** 2 + 1e-12)
+    u = k[:, None, None] * r
+    return (A[:, None, None] * torch.where(u.abs() < 1e-4, torch.ones_like(u), torch.sin(u) / u)).sum(0)
+
+
+def plate_sinc_ellipse(A, k, cx, cy, q, th, log_s, y, x) -> torch.Tensor:
+    """⑤ 楕円の減衰する波紋（持ち主の案、2026-10-18）の位相 (Ly, Lx)。④ に「楕円」と「大きさ（届く範囲）」を足したもの。
+        ρ_m = √((x'·e^(−q/2))² + (y'·e^(q/2))²)  （(x', y') は中心から見た座標を角度 θ だけ回したもの。e^q が楕円の縦横の比、面積は変えない）
+        位相の遅れ = Σ_m A_m · sin(k_m·ρ_m) / (k_m·ρ_m) · exp(−(ρ_m / s_m)²)   （s_m = e^(log_s) が波紋の届く大きさ）
+    幅 k（輪の間隔）と大きさ s（どこまで広がるか）を別々に決められる。波紋 1 つは A・k・cx・cy・q・θ・log_s の 7 つの数。"""
+    dx, dy = x[None] - cx[:, None, None], y[None] - cy[:, None, None]
+    c, sn = torch.cos(th)[:, None, None], torch.sin(th)[:, None, None]
+    xr, yr = c * dx + sn * dy, -sn * dx + c * dy
+    h = (q / 2)[:, None, None]
+    rho = torch.sqrt((xr * torch.exp(-h)) ** 2 + (yr * torch.exp(h)) ** 2 + 1e-12)
+    u = k[:, None, None] * rho
+    sinc = torch.where(u.abs() < 1e-4, torch.ones_like(u), torch.sin(u) / u)
+    env = torch.exp(-(rho / torch.exp(log_s)[:, None, None]) ** 2)
+    return (A[:, None, None] * sinc * env).sum(0)
+
+
+def apply_plate(u: torch.Tensor, phase: torch.Tensor) -> torch.Tensor:
+    """光の場 u (..., Ly, Lx) に位相の遅れ phase を掛ける: u·exp(j·phase)。明るさは変えない（位相だけの板）。"""
+    return u * torch.polar(torch.ones_like(phase), phase)
+
+
+# =============================================================================================
+# 3. 回折・明るさの正規化・レンズ
+# =============================================================================================
+# 波長 1 画素、画素の間隔 1 として計算する（Sin-CNN2 の 1 次元と同じ。板の間隔は既定 64 画素）。
+# 周期境界（場の端から出た光は反対側から入る）。
+
+def _k(L: int, device=None) -> torch.Tensor:
+    return 2 * math.pi * torch.fft.fftfreq(L, device=device)
+
+
+def transfer(Ly: int, Lx: int, z: float = 64.0, wavelength: float = 1.0, paraxial: bool = False,
+             device=None) -> torch.Tensor:
+    """距離 z だけ進む回折の伝達関数 H (Ly, Lx)（周波数領域で掛ける）。
+    paraxial=False: 角スペクトル法 exp(j·kz·z)、kz = √(k² − kx² − ky²)（届かない成分は減衰させる）。
+    paraxial=True : 近軸（フレネル）近似 exp(−j·z·(kx² + ky²)/(2k))。X と Y の積に分かれる（transfer_sep）。"""
+    k = 2 * math.pi / wavelength
+    ky, kx = _k(Ly, device)[:, None], _k(Lx, device)[None, :]
+    if paraxial:
+        return torch.polar(torch.ones(Ly, Lx, device=device), -z * (kx ** 2 + ky ** 2) / (2 * k))
+    kz2 = k ** 2 - kx ** 2 - ky ** 2
+    kz = torch.sqrt(kz2.clamp(min=0))
+    decay = torch.exp(-z * torch.sqrt((-kz2).clamp(min=0)))
+    return torch.polar(decay, kz * z)
+
+
+def transfer_sep(Ly: int, Lx: int, z: float = 64.0, wavelength: float = 1.0, device=None):
+    """近軸の伝達関数を Y 用 (Ly,) と X 用 (Lx,) に分けたもの。transfer(paraxial=True) = Hy[:, None]·Hx[None, :]。"""
+    k = 2 * math.pi / wavelength
+    ky, kx = _k(Ly, device), _k(Lx, device)
+    return (torch.polar(torch.ones(Ly, device=device), -z * ky ** 2 / (2 * k)),
+            torch.polar(torch.ones(Lx, device=device), -z * kx ** 2 / (2 * k)))
+
+
+def propagate(u: torch.Tensor, H: torch.Tensor) -> torch.Tensor:
+    """回折: 2 次元 FFT → H を掛ける → 逆 FFT。u は (..., Ly, Lx)。"""
+    return torch.fft.ifft2(torch.fft.fft2(u) * H)
+
+
+def normalize(u: torch.Tensor) -> torch.Tensor:
+    """明るさの平均を 1 に戻す（増幅）。全部 0 でも微分が壊れないように小さな数を足す。"""
+    return u / (u.abs().pow(2).mean((-2, -1), keepdim=True) + 1e-24).sqrt()
+
+
+def lens(u: torch.Tensor) -> torch.Tensor:
+    """レンズ = 2 次元フーリエ変換。同じ向きに進む光を 1 点に集める。中心が向き 0（fftshift）。"""
+    return torch.fft.fftshift(torch.fft.fft2(u, norm="ortho"), dim=(-2, -1))
+
+
+def intensity(u: torch.Tensor) -> torch.Tensor:
+    """明るさ = 振幅の 2 乗。"""
+    return u.abs().pow(2)
+
+
+# =============================================================================================
+# 4. ① の板の軽い計算（行と列に分ける）
+# =============================================================================================
+# 入力が uy(y)·ux(x) の掛け算の形で、板が ①、回折が近軸なら、場はずっと掛け算の形のまま。
+# 2 次元の FFT（Ly·Lx·log）の代わりに、長さ Ly と Lx の 1 次元 FFT を 1 本ずつで済む。
+
+def propagate_sep(uy: torch.Tensor, ux: torch.Tensor, Hy: torch.Tensor, Hx: torch.Tensor):
+    """掛け算の形の場 (uy (..., Ly), ux (..., Lx)) の回折。"""
+    return torch.fft.ifft(torch.fft.fft(uy) * Hy), torch.fft.ifft(torch.fft.fft(ux) * Hx)
+
+
+def normalize_sep(uy: torch.Tensor, ux: torch.Tensor):
+    """掛け算の形の場で、明るさの平均を 1 に戻す（Y と X を別々に 1 にすれば、積の平均も 1）。"""
+    ny = (uy.abs().pow(2).mean(-1, keepdim=True) + 1e-24).sqrt()
+    nx = (ux.abs().pow(2).mean(-1, keepdim=True) + 1e-24).sqrt()
+    return uy / ny, ux / nx
+
+
+def lens_sep(uy: torch.Tensor, ux: torch.Tensor):
+    """掛け算の形の場のレンズ。2 次元のレンズの結果は Uy[:, None]·Ux[None, :]。"""
+    f = lambda v: torch.fft.fftshift(torch.fft.fft(v, norm="ortho"), dim=-1)
+    return f(uy), f(ux)
+
+
+def outer(uy: torch.Tensor, ux: torch.Tensor) -> torch.Tensor:
+    """掛け算の形の場を 2 次元に戻す: (..., Ly, Lx)。確認と表示用（計算の途中では作らない）。"""
+    return uy[..., :, None] * ux[..., None, :]
+
+
+# =============================================================================================
+# 5. 読み出し（窓）
+# =============================================================================================
+
+def window_grid(Ly: int, Lx: int, n: int, w: int = 4, device=None) -> torch.Tensor:
+    """スクリーンに n 個の w × w の窓を、ほぼ正方の格子に等間隔に並べた重み (n, Ly, Lx)。窓の中の平均を読む。
+    レンズの後の中心（向き 0 = 入力の平均の明るさが集まる所）にかかるマスは使わない。"""
+    g = math.ceil(math.sqrt(n + 1))
+    centers = []
+    for r in range(g):
+        for c in range(g):
+            cy, cx = int((r + 0.5) * Ly / g), int((c + 0.5) * Lx / g)
+            if abs(cy - Ly // 2) < w and abs(cx - Lx // 2) < w:
+                continue                                   # 中心のマスは飛ばす
+            centers.append((cy, cx))
+    det = torch.zeros(n, Ly, Lx, device=device)
+    for i, (cy, cx) in enumerate(centers[:n]):
+        iy = (torch.arange(w, device=device) + cy - w // 2) % Ly
+        ix = (torch.arange(w, device=device) + cx - w // 2) % Lx
+        det[i, iy[:, None], ix[None, :]] = 1.0 / (w * w)
+    return det
+
+
+def read_windows(I: torch.Tensor, det: torch.Tensor) -> torch.Tensor:
+    """スクリーンの明るさ I (N, Ly, Lx) → 窓ごとの明るさ (N, n)。"""
+    return torch.einsum("nyx,cyx->nc", I, det)
+
+
+# =============================================================================================
+# 6. 入力（画像 → 光の場）
+# =============================================================================================
+
+def image_to_field(img: torch.Tensor, mode: str = "amp") -> torch.Tensor:
+    """明るさの画像 (N, Ly, Lx)（0〜1）→ 光の場（複素数）。
+    amp  : 振幅として。u = 画像の値（暗い所には光がない）。スライド写真を光で照らすのと同じ
+    phase: 位相として。u = exp(j·π·画像の値)（どこも明るさ 1、模様は位相の遅れだけ）。透明な凹凸の板と同じ"""
+    if mode == "amp":
+        return img.to(torch.complex64)
+    if mode == "phase":
+        return torch.polar(torch.ones_like(img), math.pi * img)
+    raise ValueError('mode は "amp" か "phase"')
+
+
+def illumination(L: int, blocks: int, kind: str = "tilt", device=None) -> torch.Tensor:
+    """2 次元の照明の符号 (P, L, L)。場を縦横 blocks × blocks の区画に分け、区画 m の光に、照明 j ごとに違う符号を掛ける。
+    P 通りの照明で明るさを平均すると、違う区画どうしの干渉（位置の雑音）がちょうど 0 になる（1 次元の実験10・11 の 2 次元版）。
+    tilt    : 符号 exp(j·2π·j·m / n)（n = blocks²）。照明の向きを少しずつ傾けるのと同じ。P = n
+    hadamard: アダマール行列の ±1（n は 2 の累乗）。位相 0 か π だけで作れる。P = n
+    計算は P 倍になる。"""
+    n = blocks * blocks
+    m = patch_index(L, L, blocks, blocks, device)                       # 各画素の区画番号 (L, L)
+    j = torch.arange(n, device=device, dtype=torch.float32)[:, None, None]
+    if kind == "tilt":
+        return torch.polar(torch.ones(n, L, L, device=device), 2 * math.pi * j * m[None] / n)
+    if kind == "hadamard":
+        if n & (n - 1):
+            raise ValueError("hadamard は blocks² が 2 の累乗のとき")
+        Hm = torch.ones(1, 1)
+        while Hm.shape[0] < n:
+            Hm = torch.cat([torch.cat([Hm, Hm], 1), torch.cat([Hm, -Hm], 1)], 0)
+        return Hm.to(device)[:, m].to(torch.complex64)
+    raise ValueError('kind は "tilt" か "hadamard"')
+
+
+# =============================================================================================
+# 7. 学習器（1 本の光路）
+# =============================================================================================
+
+PLATE_KINDS = ("xy", "stripes", "ripple", "ripple2", "sinc", "sinc_e")
+
+
+class Net2D(torch.nn.Module):
+    """2 次元の 1 本の光路: 入力の場 → [板 → 回折 → 明るさを平均 1 に] × 枚数 → レンズ → 窓 → スコア。
+
+    plates  : 板の形の並び。例 ["stripes"] * 16、["xy"] * 8 + ["ripple"] * 8。
+              "xy" = ① 交点で掛け算、"stripes" = ② 斜めの縞、"ripple" = ③ 等間隔の輪、"ripple2" = ③ ゾーンプレート
+    patches : ②③ は縦横 patches × patches の区画、① は X 用・Y 用それぞれ patches² / 2 本の帯（学習する数をそろえる）
+    学習するのは区画ごとの振幅 A と初期位相 φ、窓ごとの背景光、全体の温度だけ。
+    ω・k・中心・楕円は固定の乱数（Sin-CNN2 では ω 固定でよかった）。freeze=True なら板は学習しない（比較用）。
+    illum   : (blocks, kind) を与えると、2 次元の照明（illumination）で位置の雑音を消す。計算は blocks² 倍。
+    "sinc"  : ④ 減衰する波紋（plate_sinc）。区画に分けず、板 1 枚に n_ripples 個の波紋。深さ・幅・中心の位置をすべて学習する。
+              n_ripples を省略すると patches² / 2（学習する数を ①②③ とそろえる: 波紋 1 つ 4 個 = 区画 2 つ分）。
+              sinc_depth は初期の深さの倍率（既定 1 で深さ 1〜3。波紋が多いときは小さくする、実験13）。
+              sinc_centers は波紋の中心の初期配置: "random"（既定）/ "grid"（格子）/ "jitter"（格子から少しずらす）
+    "sinc_e": ⑤ 楕円で大きさを変えられる減衰する波紋（plate_sinc_ellipse）。波紋 1 つ 7 個の数。
+              n_ripples を省略すると patches² · 2 / 7（学習する数を ①②③④ とそろえる）"""
+
+    def __init__(self, L: int, n_classes: int, plates=("stripes",) * 16, patches: int = 8, z: float = 64.0,
+                 seed: int = 0, window: int = 4, freeze: bool = False, illum=None,
+                 n_ripples: int | None = None, sinc_depth: float = 1.0,
+                 sinc_centers: str = "random"):
+        super().__init__()
+        self.L, self.kinds = L, list(plates)
+        if any(k not in PLATE_KINDS for k in self.kinds):
+            raise ValueError(f"板の形は {PLATE_KINDS} のどれか")
+        g = torch.Generator().manual_seed(seed)
+        r = lambda *s: torch.rand(*s, generator=g)
+        logu = lambda lo, hi, *s: torch.exp(math.log(lo) + (math.log(hi) - math.log(lo)) * r(*s))
+        D, P2 = len(self.kinds), patches * patches
+        self.nb = P2 // 2
+        # 学習する数: 板ごとに (A, φ) を P2 組（① は X 用 nb 本 + Y 用 nb 本の帯）
+        self.A = torch.nn.Parameter(0.5 + 0.5 * r(D, P2), requires_grad=not freeze)
+        self.phi = torch.nn.Parameter(2 * math.pi * r(D, P2), requires_grad=not freeze)
+        # 固定の数（どの形の分も作り、板の形に合うものだけ使う。乱数の並びを形によらずそろえるため）
+        ang = 2 * math.pi * r(D, P2)
+        wmag = logu(2 * math.pi / L, math.pi / 2, D, P2)
+        self.register_buffer("wx", wmag * torch.cos(ang))                  # ② の縞の細かさと向き
+        self.register_buffer("wy", wmag * torch.sin(ang))
+        self.register_buffer("w1", logu(2 * math.pi / L, math.pi, D, P2))   # ① の X 用・Y 用の細かさ
+        self.register_buffer("k1", logu(2 * math.pi / L, math.pi, D, P2))   # ③ 等間隔の輪の細かさ
+        self.register_buffer("k2", logu(math.pi / L ** 2, math.pi / (4 * L), D, P2))   # ③ ゾーンプレート
+        self.register_buffer("cx", L * (3 * r(D, P2) - 1))                 # ③ の中心（場の外でもよい）
+        self.register_buffer("cy", L * (3 * r(D, P2) - 1))
+        self.register_buffer("ea", torch.ones(D, P2))                      # ③ の楕円の軸（a = 1、b = 0.5〜2）
+        self.register_buffer("eb", logu(0.5, 2.0, D, P2))
+        self.register_buffer("th", math.pi * r(D, P2))                     # ③ の楕円の角度
+        y, x = grid(L, L)
+        self.register_buffer("y", y)
+        self.register_buffer("x", x)
+        self.register_buffer("pid", patch_index(L, L, patches, patches))
+        self.register_buffer("band", band_index(L, self.nb))
+        self.register_buffer("H", transfer(L, L, z))
+        self.register_buffer("det", window_grid(L, L, n_classes, window))
+        self.gain = torch.nn.Parameter(torch.tensor(5.0))                  # 明るさ → スコアの倍率（温度）
+        self.bias = torch.nn.Parameter(torch.zeros(n_classes))            # 窓ごとの背景光
+        # ④ 減衰する波紋の数（別の乱数の列から作る。ほかの形の板の初期値を変えないため）
+        self.sinc_layers = [d for d, k in enumerate(self.kinds) if k in ("sinc", "sinc_e")]
+        M = n_ripples or (P2 * 2 // 7 if "sinc_e" in self.kinds else P2 // 2)
+        gs = torch.Generator().manual_seed(seed + 7919)
+        rs = lambda *s: torch.rand(*s, generator=gs)
+        Ds = max(len(self.sinc_layers), 1) if self.sinc_layers else 0
+        self.sA = torch.nn.Parameter(sinc_depth * (1.0 + 2.0 * rs(Ds, M)), requires_grad=not freeze)   # 深さ（中心での位相の遅れ）
+        self.sk = torch.nn.Parameter(torch.exp(math.log(2 * math.pi / L) + (math.log(math.pi / 2) - math.log(2 * math.pi / L)) * rs(Ds, M)),
+                                     requires_grad=not freeze)                                    # 幅（輪の細かさ）
+        self.scx = torch.nn.Parameter(L * (2 * rs(Ds, M) - 0.5), requires_grad=not freeze)       # 中心（場の外でもよい）
+        self.scy = torch.nn.Parameter(L * (2 * rs(Ds, M) - 0.5), requires_grad=not freeze)
+        if sinc_centers != "random" and Ds:      # 波紋の中心を格子に並べる（"grid"）か、格子から少しずらす（"jitter"）
+            n = math.ceil(math.sqrt(M))
+            step = 2 * L / n                     # でたらめのときと同じ範囲 −0.5L〜1.5L を覆う
+            gy, gx = torch.meshgrid(torch.arange(n), torch.arange(n), indexing="ij")
+            cx0 = (-0.5 * L + (gx.flatten()[:M].float() + 0.5) * step)[None].repeat(Ds, 1)
+            cy0 = (-0.5 * L + (gy.flatten()[:M].float() + 0.5) * step)[None].repeat(Ds, 1)
+            if sinc_centers == "jitter":
+                gj = torch.Generator().manual_seed(seed + 15485863)
+                cx0 = cx0 + (torch.rand(Ds, M, generator=gj) - 0.5) * 0.5 * step
+                cy0 = cy0 + (torch.rand(Ds, M, generator=gj) - 0.5) * 0.5 * step
+            elif sinc_centers != "grid":
+                raise ValueError('sinc_centers は "random" / "grid" / "jitter"')
+            with torch.no_grad():
+                self.scx.copy_(cx0)
+                self.scy.copy_(cy0)
+        # ⑤ の楕円と大きさ（さらに別の乱数の列。④ の初期値を変えないため）
+        ge = torch.Generator().manual_seed(seed + 104729)
+        re = lambda *s: torch.rand(*s, generator=ge)
+        self.sq = torch.nn.Parameter(1.4 * re(Ds, M) - 0.7, requires_grad=not freeze)                  # 楕円の縦横の比 e^q（0.5〜2 倍）
+        self.sth = torch.nn.Parameter(math.pi * re(Ds, M), requires_grad=not freeze)                  # 楕円の角度
+        self.slog_s = torch.nn.Parameter(math.log(L) + re(Ds, M) - 0.5, requires_grad=not freeze)     # 大きさ（届く範囲 0.6L〜1.6L）
+        self.register_buffer("illum", None if illum is None else illumination(L, *illum))
+
+    def plate_phase(self, d: int) -> torch.Tensor:
+        """板 d の位相の遅れ (L, L)。"""
+        k, A, phi, nb = self.kinds[d], self.A[d], self.phi[d], self.nb
+        if k == "sinc":
+            i = self.sinc_layers.index(d)
+            return plate_sinc(self.sA[i], self.sk[i], self.scx[i], self.scy[i], self.y, self.x)
+        if k == "sinc_e":
+            i = self.sinc_layers.index(d)
+            return plate_sinc_ellipse(self.sA[i], self.sk[i], self.scx[i], self.scy[i], self.sq[i], self.sth[i],
+                                      self.slog_s[i], self.y, self.x)
+        if k == "xy":
+            c = self.x[0]
+            return plate_xy(A[:nb], self.w1[d, :nb], phi[:nb], self.band,
+                            A[nb:], self.w1[d, nb:], phi[nb:], self.band, c, c)
+        if k == "stripes":
+            return plate_stripes(A, self.wx[d], self.wy[d], phi, self.pid, self.y, self.x)
+        kk, pw = (self.k1[d], 1) if k == "ripple" else (self.k2[d], 2)
+        return plate_ripple(A, kk, phi, self.cx[d], self.cy[d], self.ea[d], self.eb[d], self.th[d],
+                            self.pid, self.y, self.x, power=pw)
+
+    def screen(self, u: torch.Tensor) -> torch.Tensor:
+        """光の場 (N, L, L) → レンズの後の明るさ (N, L, L)（平均 1）。照明があれば照明ごとの明るさを平均する。"""
+        if self.illum is not None:
+            u = u[:, None] * self.illum[None]                              # (N, P, L, L)
+        for d in range(len(self.kinds)):
+            u = normalize(propagate(apply_plate(u, self.plate_phase(d)), self.H))
+        I = intensity(lens(u))
+        if self.illum is not None:
+            I = I.mean(1)
+        return I / (I.mean((-2, -1), keepdim=True) + 1e-12)
+
+    def forward(self, u: torch.Tensor) -> torch.Tensor:
+        """光の場 (N, L, L) → クラスごとのスコア (N, n_classes)。"""
+        return self.gain * read_windows(self.screen(u), self.det) + self.bias
+
+    def n_params(self) -> int:
+        """学習する数（使っている板の数だけ。背景光、温度を含む）。"""
+        n = self.gain.numel() + self.bias.numel()
+        for d, k in enumerate(self.kinds):
+            if k in ("sinc", "sinc_e"):
+                n += (4 if k == "sinc" else 7) * self.sA.shape[1] if self.sA.requires_grad else 0
+            elif self.A.requires_grad:
+                n += self.A.shape[1] + self.phi.shape[1]
+        return n
+
+
+def _device(net: torch.nn.Module):
+    for t in list(net.buffers()) + list(net.parameters()):
+        return t.device
+    return torch.device("cpu")
+
+
+def generic_images(n: int, L: int = 64, seed: int = 0, noise: float = 0.1) -> torch.Tensor:
+    """どの課題とも関係のない一般の絵 (n, L, L)（0〜1）。融合する技能に「担当なし」として見せる（実験10）。
+    前半はぼやけた塊 1〜3 個、後半はぼかした雑音を切ったまだらの模様（中央付近）。線や形は描かない。"""
+    g = torch.Generator().manual_seed(seed)
+    yy = torch.arange(L, dtype=torch.float32)[None, :, None]
+    xx = torch.arange(L, dtype=torch.float32)[None, None, :]
+    img = torch.zeros(n, L, L)
+    h = n // 2
+    for _ in range(3):
+        on = (torch.rand(h, generator=g) < 0.7).float()[:, None, None]
+        cx = L / 2 + (torch.rand(h, generator=g) - 0.5) * 0.6 * L
+        cy = L / 2 + (torch.rand(h, generator=g) - 0.5) * 0.6 * L
+        sg = (2 + 6 * torch.rand(h, generator=g)) * L / 64
+        img[:h] += on * torch.exp(-((xx - cx[:, None, None]) ** 2 + (yy - cy[:, None, None]) ** 2) / (2 * sg[:, None, None] ** 2))
+    k = torch.exp(-(torch.arange(-6, 7, dtype=torch.float32) ** 2) / 8)
+    k = k / k.sum()
+    z = torch.randn(n - h, 1, L, L, generator=g)
+    z = torch.nn.functional.conv2d(z, k[None, None, :, None], padding=(6, 0))
+    z = torch.nn.functional.conv2d(z, k[None, None, None, :], padding=(0, 6))[:, 0]
+    env = torch.exp(-((xx - L / 2) ** 2 + (yy - L / 2) ** 2) / (2 * (L / 6) ** 2))
+    img[h:] = (z > 0.5 * z.std()).float() * env[0]
+    return (img + noise * torch.randn(n, L, L, generator=g)).clamp(0, 1)
+
+
+def train(net: torch.nn.Module, X: torch.Tensor, y: torch.Tensor, steps: int = 1500, lr: float = 0.01,
+          batch_size: int = 256, seed: int = 0, to_input=None, reject: torch.Tensor | None = None,
+          reject_weight: float = 1.0, schedule: str = "const", log_every: int = 0, log_fn=None) -> torch.nn.Module:
+    """クロスエントロピーで学習する（Adam）。X の一部を to_input で変換してから net に渡す（例: image_to_field）。
+    reject に「担当なし」の絵（generic_images）を渡すと、それを見たときはどの窓も同じ明るさになる（答えを出さない）ようにも学ぶ。
+    融合する技能はこれで学習しておくと、相手のデータなしで足すだけの融合が成り立つ（実験10: 80.8 → 100%）。
+    schedule="cosine" で学習率を最後に 0 まで下げる（学習の谷で終わらない。実験17・21。推奨）。
+    log_every > 0 なら、そのステップごとに学習の経過を net.history（辞書の並び）に記録する:
+      ステップ・学習の時間（秒、記録の時間は除く）・その回の損失・学習率、と log_fn(net) が返す辞書（例: テストの正解率）。
+      図は tools/fig_history.py で描ける。"""
+    dev = _device(net)
+    opt = torch.optim.Adam([p for p in net.parameters() if p.requires_grad], lr=lr)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps) if schedule == "cosine" else None
+    g = torch.Generator().manual_seed(seed)
+    to_input = to_input or (lambda v: v)
+    import time as _time
+    net.history, t_train, t0 = [], 0.0, _time.perf_counter()
+    for step in range(1, steps + 1):
+        idx = torch.randint(len(X), (batch_size,), generator=g)
+        loss = torch.nn.functional.cross_entropy(net(to_input(X[idx].to(dev))), y[idx].to(dev))
+        if reject is not None:
+            j = torch.randint(len(reject), (batch_size // 2,), generator=g)
+            loss = loss - reject_weight * torch.nn.functional.log_softmax(net(to_input(reject[j].to(dev))), 1).mean()
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        if sched is not None:
+            sched.step()
+        if log_every and (step % log_every == 0 or step == steps):
+            t_train += _time.perf_counter() - t0
+            rec = dict(step=step, train_s=round(t_train, 2), loss=float(loss.detach()), lr=opt.param_groups[0]["lr"])
+            if log_fn is not None:
+                with torch.no_grad():
+                    rec.update(log_fn(net))
+            net.history.append(rec)
+            t0 = _time.perf_counter()
+    return net
+
+
+@torch.no_grad()
+def evaluate(net: torch.nn.Module, X: torch.Tensor, y: torch.Tensor, batch_size: int = 500, to_input=None) -> float:
+    """正解率（%）。"""
+    dev = _device(net)
+    to_input = to_input or (lambda v: v)
+    ok = 0
+    for i in range(0, len(X), batch_size):
+        ok += (net(to_input(X[i:i + batch_size].to(dev))).argmax(1).cpu() == y[i:i + batch_size]).sum().item()
+    return 100.0 * ok / len(X)
+
+
+# =============================================================================================
+# 8. 組み立て: 融合・取消・足し算・引き算（Sin-CNN2 の merge・combine・derive の 2 次元版）
+# =============================================================================================
+# 技能ごとに 1 本の光路（Net2D）を持たせる。窓の総数 n_classes は融合する技能どうしでそろえ、
+# 各技能は自分の担当の窓（クラス）だけをラベルにして学習する（他の窓は暗くなるように学ぶ）。
+
+class Merged(torch.nn.Module):
+    """別々に学習した光路を並べたもの。光路どうしは干渉しない（色や偏光の違い）と考え、スクリーンでは明るさを足すだけ。
+    融合に追加の学習は要らず、光路を外せば完全に元に戻る（取消）。"""
+
+    def __init__(self, nets):
+        super().__init__()
+        if not nets:
+            raise ValueError("光路が空")
+        if len({(n.L, n.det.shape) for n in nets}) != 1:
+            raise ValueError("融合する光路どうしで場の大きさと窓の数をそろえる")
+        self.nets = torch.nn.ModuleList(nets)
+        self.det = nets[0].det
+
+    def forward(self, u: torch.Tensor) -> torch.Tensor:
+        return sum(n(u) for n in self.nets) / len(self.nets)      # 各光路のスコアの平均（＝明るさの平均）
+
+
+def merge(nets) -> Merged:
+    """融合。取消は、外したい光路を除いたリストで merge し直せばよい（残りは元と完全に同じ）。"""
+    return Merged(list(nets))
+
+
+def derive(base: torch.nn.Module) -> torch.nn.Module:
+    """base を共通の出発点として、そのコピーを作る（あとで別のデータで train する）。"""
+    import copy
+    return copy.deepcopy(base)
+
+
+def combine(base: torch.nn.Module, terms) -> torch.nn.Module:
+    """光路の足し算・引き算: base + Σ 係数 × (技能 − base) を 1 本の光路として作る（計算は増えない）。
+    技能は derive(base) を学習したもの。共通の出発点が必要（1 次元の実験23）。"""
+    import copy
+    for _, t in terms:
+        for (n1, b1), (n2, b2) in zip(base.named_buffers(), t.named_buffers()):
+            if b1 is not None and not torch.equal(b1, b2):
+                raise ValueError(f"共通の出発点（derive で作ったもの）どうしでないと足し引きできない（{n1} が違う）")
+    out = copy.deepcopy(base)
+    bp = dict(base.named_parameters())
+    with torch.no_grad():
+        for name, p in out.named_parameters():
+            p.copy_(bp[name] + sum(c * (dict(t.named_parameters())[name] - bp[name]) for c, t in terms))
+    return out
+
+
+# =============================================================================================
+# 9. 読み方の部品: 符号で読む・部品の窓（窓の数に縛られない読み方、実験22〜26）
+# =============================================================================================
+
+def unit_rows(v: torch.Tensor) -> torch.Tensor:
+    """各行から平均を引いて長さ 1 にする（窓の明るさの模様・符号を比べるため）。"""
+    v = v - v.mean(-1, keepdim=True)
+    return v / (v.norm(dim=-1, keepdim=True) + 1e-9)
+
+
+def code_scores(windows: torch.Tensor, codes: torch.Tensor, temp: float = 10.0) -> torch.Tensor:
+    """窓の明るさ (N, K) と、クラスごとの符号 (C, K) の似ている度合い × 温度 = クラスの点数 (N, C)。
+    窓の数 K はクラス数 C と無関係に決めてよい（K = 16 で 1 クラス 1 窓と同等以上、実験22）。"""
+    return temp * unit_rows(windows) @ unit_rows(codes).T
+
+
+def prototype_codes(windows: torch.Tensor, labels: torch.Tensor, n_classes: int) -> torch.Tensor:
+    """クラスごとの窓の模様の平均（典型）を符号にする (C, K)。学習なしでクラスを足すときは、
+    全部のクラスの符号をこの作り方にそろえる（そろえないと新しいクラスが古いクラスを奪う、実験23）。"""
+    w = unit_rows(windows)
+    return torch.stack([w[labels == c].mean(0) for c in range(n_classes)])
+
+
+def parts_scores(part_logits: torch.Tensor, class_parts: torch.Tensor, prior: torch.Tensor | None = None) -> torch.Tensor:
+    """部品ごとの窓の点数 (N, P) から、クラスの点数 (N, C) を作る（1 次元の語根の 2 次元版、実験26）。
+    class_parts (C, P) は各クラスが持つ部品（0/1）。例を見せないクラスも、部品の組み合わせを書くだけで点数が出る。
+    prior (P,) は部品の出やすさ（訓練データでの対数オッズ）。差し引くと、見せないクラスが見せたクラスに吸い込まれるのを防ぐ。"""
+    s = part_logits if prior is None else part_logits - prior
+    F_ = torch.nn.functional
+    return F_.logsigmoid(s) @ class_parts.T + F_.logsigmoid(-s) @ (1 - class_parts).T
+
+
+# =============================================================================================
+# 10. どこに何があるか: 4f 系（光学相関器）と、光の非線形をはさんだ 2 段（実験27〜30）
+# =============================================================================================
+
+class Correlator4f(torch.nn.Module):
+    """4f 系: レンズ → 周波数の面の位相の板（全画素を学習）→ 逆のレンズ。探す物がある位置に光が集まる。
+    周波数の面の板は、絵のどこに物があっても同じ働きをする（位置をずらすと出力も同じだけずれる）。
+    nonlinear=True なら 2 段にして、間で「明るさを測り、その明るさで光を出し直す」（光の非線形）。
+    線形の段を何段重ねても 1 枚と同じだが、間に非線形を入れると見分けが強くなる（AUC 89/82 → 97/97%、実験28）。
+    出力は画素ごとの点数 (N, L, L)。sigmoid でその画素に探す物の中心がある確率になる。"""
+
+    def __init__(self, L: int, nonlinear: bool = True, seed: int = 0):
+        super().__init__()
+        g = torch.Generator().manual_seed(seed)
+        self.phase = torch.nn.Parameter(0.1 * torch.randn(2 if nonlinear else 1, L, L, generator=g))
+        self.nonlinear = nonlinear
+        self.gain = torch.nn.Parameter(torch.tensor(1.0))
+        self.bias = torch.nn.Parameter(torch.tensor(-4.0))
+
+    def _stage(self, u, s):
+        U = torch.fft.fft2(u, norm="ortho") * torch.polar(torch.ones_like(self.phase[s]), self.phase[s])
+        return intensity(normalize(torch.fft.ifft2(U, norm="ortho")))
+
+    def screen(self, u: torch.Tensor) -> torch.Tensor:
+        I = self._stage(u, 0)
+        if self.nonlinear:
+            I = I / (I.mean((-2, -1), keepdim=True) + 1e-12)
+            I = self._stage(torch.sqrt(I + 1e-12).to(torch.complex64), 1)
+        return I
+
+    def forward(self, u: torch.Tensor) -> torch.Tensor:
+        I = self.screen(u)
+        return self.gain * I / (I.mean((-2, -1), keepdim=True) + 1e-12) + self.bias
