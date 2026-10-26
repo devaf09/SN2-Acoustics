@@ -84,10 +84,27 @@ def n_ffts(n_plates: int, lens: int = 1) -> int:
 
 
 def front_field(net, u):
-    """net の板を全部通した光（レンズの前）。Net2D.screen の板の部分と同じ計算（照明なし）。"""
+    """net の板を全部通した光（レンズの前）。Net2D.screen の板の部分と同じ計算（照明なし）。
+    net が NLNet2D なら、指定の板の後で光の非線形（明るさの平方根で光を出し直す）をはさむ。"""
+    nl = getattr(net, "nl_after", ())
     for d in range(len(net.kinds)):
         u = p2.normalize(p2.propagate(p2.apply_plate(u, net.plate_phase(d)), net.H))
+        if d in nl:
+            u = p2.normalize(u.abs().to(torch.complex64))       # √(明るさ) = |u|、位相は捨てる（実験09）
     return u
+
+
+class NLNet2D(p2.Net2D):
+    """Net2D の板の途中に光の非線形をはさんだもの（実験09）。nl_after = 非線形を入れる板の番号の並び（0 始まり）。
+    非線形は「明るさを測って、その平方根の振幅で光を出し直す」（SN2-Parts-2D の実験28・75〜77 で効いた sqrt と同じ）。"""
+
+    def __init__(self, *args, nl_after=(), **kw):
+        super().__init__(*args, **kw)
+        self.nl_after = tuple(nl_after)
+
+    def screen(self, u):
+        I = p2.intensity(p2.lens(front_field(self, u)))
+        return I / (I.mean((-2, -1), keepdim=True) + 1e-12)
 
 
 def lens_scores(net, u):
