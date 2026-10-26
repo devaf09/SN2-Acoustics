@@ -129,3 +129,52 @@ fig.tight_layout()
 fig.savefig(os.path.join(OUT, "exp03_colors.png"), dpi=150)
 plt.close(fig)
 print("書き出し:", os.listdir(OUT))
+
+# ---- 図 3: 2D（実験06・07）の計算量と正解率 ----------------------------------------------------------
+if os.path.exists(os.path.join(ROOT, "results", "exp06.txt")) and os.path.exists(os.path.join(ROOT, "results", "exp07.txt")):
+    p6 = defaultdict(lambda: defaultdict(list))
+    flat = defaultdict(list)
+    for r in load("06"):
+        if r["args"]["reject"] == 0:
+            continue
+        for m, v in r["results"].items():
+            if m == "flat-1net":
+                flat[r["task"]].append(v["acc"])
+            elif m.startswith("all-"):
+                p6[r["task"]][("all", m)].append((v["acc"], v["ffts_pct"]))
+            elif m.startswith(("R1", "R2")):
+                p6[r["task"]][("router", m)].append((v["acc"], v["ffts_pct"]))
+    for r in load("07"):
+        for m, v in r["results"].items():
+            if m.startswith("shared-top"):
+                p6[r["task"]][("shared", f"f{r['front']}b{r['back']}:{m}")].append((v["acc"], v["ffts_pct"]))
+    titles = {"synth4": "合成 4 課題（専門家 4 人・33 クラス）", "fashion_sim": "Fashion（似た服を同じ専門家に）",
+              "fashion_mix": "Fashion（似た服を別の専門家に）"}
+    label2 = {"all": "全員を動かす", "router": "別々の振り分け役 + 元の専門家", "shared": "前段を共有（実験07）"}
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.4))
+    for ax, task in zip(axes, ("synth4", "fashion_sim", "fashion_mix")):
+        style(ax)
+        best = max(agg([a_ for a_, _ in v])[0] for (g, _), v in p6[task].items() if g == "all")
+        fl = agg(flat[task])[0]
+        ax.axvspan(0, 35, color=C3, alpha=0.07, linewidth=0)
+        ax.axhline(best, color=C1, linewidth=1, linestyle="--")
+        ax.text(60, best + 0.6, f"全員を動かす最良 {best:.1f}%", color=INK2, fontsize=8)
+        ax.axhline(fl, color=INK2, linewidth=1, linestyle=":")
+        ax.text(60, fl - 2.2, f"1 本で全クラス {fl:.1f}%（計算 {100 / (4 if task == 'synth4' else 5):.0f}%）", color=INK2, fontsize=8)
+        seen = set()
+        for (g, name), v in p6[task].items():
+            m_acc, se = agg([a_ for a_, _ in v])
+            ax.errorbar(v[0][1], m_acc, yerr=se, fmt=marker[g], ms=7, color=color[g], ecolor=color[g], elinewidth=1,
+                        markeredgecolor=SURF, markeredgewidth=1.5, label=label2[g] if g not in seen else None, zorder=3)
+            seen.add(g)
+        ax.set_xlim(0, 105)
+        ax.set_ylim(40, 95)
+        ax.set_title(titles[task], color=INK, fontsize=11, loc="left")
+        ax.set_xlabel("計算量（FFT の回数、元の専門家を全員動かす = 100%）")
+    axes[0].set_ylabel("全体の正解率（%）")
+    axes[0].legend(loc="lower right", frameon=False, fontsize=8)
+    fig.suptitle("2D の実験06・07：計算量と正解率（3 seed の平均、ひげは標準誤差。緑の帯 = 計算量 35% 以下）", x=0.01, ha="left", color=INK, fontsize=11)
+    fig.tight_layout()
+    fig.savefig(os.path.join(OUT, "exp06_07_2d.png"), dpi=150)
+    plt.close(fig)
+    print("書き出し: exp06_07_2d.png")
