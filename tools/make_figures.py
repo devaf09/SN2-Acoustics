@@ -178,3 +178,38 @@ if os.path.exists(os.path.join(ROOT, "results", "exp06.txt")) and os.path.exists
     fig.savefig(os.path.join(OUT, "exp06_07_2d.png"), dpi=150)
     plt.close(fig)
     print("書き出し: exp06_07_2d.png")
+
+# ---- 図 4: 実験08（2D で専門家を後から足す）-------------------------------------------------------------
+if os.path.exists(os.path.join(ROOT, "results", "exp08.txt")):
+    r8 = load("08")
+    flat8 = defaultdict(list)
+    for r in load("06"):
+        if r["args"]["reject"] > 0:
+            flat8[r["task"]].append(r["results"]["flat-1net"]["acc"])
+    rows = [("orig-all-jcal", "元の専門家を全員動かす", C1), ("flat", "1 本で全データを学び直す", INK2),
+            ("after-plate-replay100-top1", "足す: 明るさだけの窓口", C2), ("after-thin-replay100-top1", "足す: 薄い板の窓口", C3),
+            ("after-thin-replay10+bias-top1", "足す: 薄い板 + 古いデータ 1 割 + 下駄", C3)]
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.2), sharey=True)
+    for ax, task in zip(axes, ("fashion_sim", "fashion_mix", "synth4")):
+        style(ax)
+        rs = [r for r in r8 if r["task"] == task]
+        ys, es, cs, labs = [], [], [], []
+        for key, lab, c in rows:
+            vals = flat8[task] if key == "flat" else [r["results"][key]["all"]["acc"] for r in rs]
+            m_, e_ = agg(vals)
+            ys.append(m_); es.append(e_); cs.append(c); labs.append(lab)
+        xs = range(len(ys))
+        ax.bar(xs, ys, yerr=es, color=cs, width=0.7, edgecolor=SURF, linewidth=2, capsize=3, ecolor=INK2)
+        for x, yv in zip(xs, ys):
+            ax.text(x, yv + 1, f"{yv:.1f}", ha="center", fontsize=8, color=INK)
+        ax.set_xticks(list(xs))
+        ax.set_xticklabels(labs, rotation=30, ha="right", fontsize=8)
+        ax.set_ylim(40, 100)
+        ax.set_title({"fashion_sim": "Fashion（似た服を同じ専門家に）", "fashion_mix": "Fashion（似た服を別の専門家に）",
+                      "synth4": "合成 4 課題（新しい人 = 形）"}[task], loc="left", color=INK, fontsize=11)
+    axes[0].set_ylabel("足した後の全クラスの正解率（%）")
+    fig.suptitle("実験08：専門家を後から 1 人足す（古い部分は固定。3 seed の平均、ひげは標準誤差）", x=0.01, ha="left", color=INK, fontsize=11)
+    fig.tight_layout()
+    fig.savefig(os.path.join(OUT, "exp08_add.png"), dpi=150)
+    plt.close(fig)
+    print("書き出し: exp08_add.png")
