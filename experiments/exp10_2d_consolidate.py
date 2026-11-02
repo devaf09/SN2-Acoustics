@@ -330,6 +330,19 @@ for variant in a.variants.split(","):
     S2_te = [s2.scores(n_, Fte2, DEV, owners[k], prep=lambda v: v) for k, n_ in enumerate(bk)]
     S2_va = [s2.scores(n_, Fva2, DEV, owners[k], prep=lambda v: v) for k, n_ in enumerate(bk)]
     r, _ = evaluate_full(Zs["te"], Zs["va"], S2_te, S2_va, 0)
+    # 受付の下駄（専門家ごと K 個）を検証用データで合わせ直した版（固定化の学習データは新しい人に偏るため。実験08 の下駄と同じ考え）
+    dsh = torch.zeros(K, requires_grad=True)
+    opt3 = torch.optim.Adam([dsh], lr=0.05)
+    for _ in range(300):
+        l3 = F.cross_entropy(Zs["va"] + dsh, e_va)
+        opt3.zero_grad()
+        l3.backward()
+        opt3.step()
+    dsh = dsh.detach()
+    rb, _ = evaluate_full(Zs["te"] + dsh, Zs["va"] + dsh, S2_te, S2_va, 0)
+    for m in (1, 2):
+        rb[f"top{m}"]["route_bias"] = dsh.tolist()
+        res[f"{variant}+bias-top{m}"] = rb[f"top{m}"]
     # 取消: 固定化した系から新しい人（窓・後段）を外し、古い検証用データで較正し直して、足す前の答えと比べる
     cal_u = s2.fit_joint(Zs["va"][old_va][:, :NEW], [s[old_va] for s in S2_va[:NEW]], y_va_col[old_va])
     for m in (1, 2):
