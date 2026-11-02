@@ -51,7 +51,9 @@ ap.add_argument("--reject", type=float, default=0.3)
 ap.add_argument("--replay", type=float, default=0.1, help="付け足し・固定化で混ぜる古いデータの割合")
 ap.add_argument("--kd_w", type=float, default=1.0, help="受付のお手本合わせ（KL）の重み")
 ap.add_argument("--back_w", type=float, default=0.1, help="後段の生の点数のお手本合わせ（二乗誤差）の重み")
-ap.add_argument("--variants", default="K1,K2,K3")
+ap.add_argument("--variants", default="K1,K2,K3",
+                help="K1 / K2 / K3 に続けて、f = 前段の光そのものもお手本に合わせる（重み --field_w）、b<数> = 後段のお手本合わせの重みをその数に（例 K2b10、K1f）")
+ap.add_argument("--field_w", type=float, default=1.0, help="f つきの版で、前段の光をお手本の前段の光に合わせる（相対の二乗誤差）重み")
 ap.add_argument("--n_train", type=int, default=4000)
 ap.add_argument("--n_generic", type=int, default=4000)
 ap.add_argument("--device", default="cuda")
@@ -257,7 +259,13 @@ def route_logits(fr, u):
     return v, s2.lens_scores(fr, v)
 
 
-def consolidate(variant):
+def consolidate(name):
+    import re
+    mt = re.fullmatch(r"(K[123])(f?)(?:b([0-9.]+))?", name)
+    if mt is None:
+        raise ValueError(f"版の名前が読めない: {name}")
+    variant, use_field = mt.group(1), mt.group(2) == "f"
+    back_w = float(mt.group(3)) if mt.group(3) else a.back_w
     fr, bk = make_student()
     train_back = variant in ("K2", "K3")
     params = [p for n_, p in fr.named_parameters() if n_ in ("A", "phi", "gain", "bias")]
@@ -287,8 +295,11 @@ def consolidate(variant):
             tr = T_route[j].to(DEV)
             loss = loss + a.kd_w * F.kl_div(F.log_softmax(zr, 1), F.log_softmax(tr, 1), log_target=True, reduction="batchmean")
             sb = torch.cat([n_(v)[:, owners[k]] for k, n_ in enumerate(bk)], 1)
-            loss = loss + a.back_w * F.mse_loss(sb, T_back[j].to(DEV))
-        else:                                                           # K3: 正解のラベルだけ
+            loss = loss + back_w * F.mse_loss(sb, T_back[j].to(DEV))
+        if use_field:                                                   # 前段の光そのものをお手本に合わせる（後段が見る光を変えない）
+            fv = F_c[j].to(DEV)
+            loss = loss + a.field_w * (v - fv).abs().pow(2).mean() / fv.abs().pow(2).mean()
+        if variant == "K3":                                             # K3: 正解のラベルだけ
             yj = y_c[j].to(DEV)
             for k, n_ in enumerate(bk):
                 mk = ej == k
