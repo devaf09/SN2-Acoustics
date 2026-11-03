@@ -4,6 +4,8 @@
 
 - exp02_04_accuracy_vs_compute.png: 計算量（FFT 回数、全員を動かす = 100%）と全体の正解率。専門家 4 人・16 クラス、課題ごと
 - exp03_colors.png: 振り分け役（板 8 枚・16 枚）の色の数 T と振り分けの正解率（横軸は 2 倍ごと = 対数）
+- exp06_07_2d.png / exp08_add.png: 2D の振り分け・前段の共有 / 専門家を後から足す
+- exp10_consolidate.png: 記憶の固定化。付け足しただけ・固定化 3 通り・下駄の合わせ直し・最初から全員で学習の、全クラス / 古いクラス / 新しいクラスの正解率
 色は 3 つまで（データ可視化の基準パレットの 1〜3 番: 青・橙・緑。全ての組み合わせで色覚の違いに強いことが確かめられている範囲）。
 """
 from __future__ import annotations
@@ -24,7 +26,7 @@ OUT = os.path.join(ROOT, "docs", "images")
 os.makedirs(OUT, exist_ok=True)
 C1, C2, C3 = "#2a78d6", "#eb6834", "#1baf7a"
 INK, INK2, GRID, SURF = "#0b0b0b", "#52514e", "#e4e3df", "#fcfcfb"
-plt.rcParams.update({"font.family": ["Yu Gothic", "Meiryo", "Noto Sans JP", "sans-serif"], "font.size": 10,
+plt.rcParams.update({"font.family": ["Yu Gothic", "Meiryo", "Noto Sans JP", "WenQuanYi Zen Hei", "sans-serif"], "font.size": 10,
                      "axes.edgecolor": INK2, "axes.labelcolor": INK, "xtick.color": INK2, "ytick.color": INK2,
                      "figure.facecolor": SURF, "axes.facecolor": SURF, "savefig.facecolor": SURF})
 
@@ -213,3 +215,49 @@ if os.path.exists(os.path.join(ROOT, "results", "exp08.txt")):
     fig.savefig(os.path.join(OUT, "exp08_add.png"), dpi=150)
     plt.close(fig)
     print("書き出し: exp08_add.png")
+
+
+# ---- 実験10: 記憶の固定化 ---------------------------------------------------------------------------
+if os.path.exists(os.path.join(ROOT, "results", "exp10.txt")):
+    r10 = load("10")
+    ref07 = defaultdict(list)                              # 最初から全員そろって学習（実験07、前段 8 + 後段 6、上位 1 人）
+    for r in load("07"):
+        if r.get("front") == 8 and r.get("back") == 6 and r["args"]["reject"] > 0:
+            ref07[r["task"]].append(r["results"]["shared-top1"]["acc"])
+    rows = [("added-top1", "付け足しただけ", INK2), ("K1-top1", "固定化 K1 前段だけ", C1), ("K2-top1", "固定化 K2 前段 + 後段", C1),
+            ("K3-top1", "固定化 K3 お手本なし", C1), ("K2+bias-top1", "K2 + 受付の下駄", C3), ("K3+bias-top1", "K3 + 受付の下駄", C3),
+            ("ref07", "最初から全員で学習（実験07）", C2)]
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.4), sharey=True)
+    for ax, task in zip(axes, ("fashion_sim", "fashion_mix", "synth4")):
+        style(ax)
+        rs = [r for r in r10 if r["task"] == task]
+        ys, es, cs, labs = [], [], [], []
+        for key, lab, c in rows:
+            if key == "ref07":
+                vals = ref07[task]
+            else:
+                seen, vals = set(), []                     # 同じ seed の重複（10a〜g で何度も作り直した付け足しの系）は 1 つに
+                for r in rs:
+                    if key in r["results"] and (key != "added-top1" or r["seed"] not in seen):
+                        seen.add(r["seed"])
+                        vals.append(r["results"][key]["all"]["acc"])
+            if not vals:
+                continue
+            m_, e_ = agg(vals)
+            ys.append(m_); es.append(e_); cs.append(c); labs.append(lab)
+        xs = range(len(ys))
+        ax.bar(xs, ys, yerr=es, color=cs, width=0.7, edgecolor=SURF, linewidth=2, capsize=3, ecolor=INK2)
+        for x, yv in zip(xs, ys):
+            ax.text(x, yv + 1, f"{yv:.1f}", ha="center", fontsize=8, color=INK)
+        ax.set_xticks(list(xs))
+        ax.set_xticklabels(labs, rotation=35, ha="right", fontsize=8)
+        ax.set_ylim(50, 95)
+        ax.set_title({"fashion_sim": "Fashion（似た服を同じ専門家に）", "fashion_mix": "Fashion（似た服を別の専門家に）",
+                      "synth4": "合成 4 課題（新しい人 = 形）"}[task], loc="left", color=INK, fontsize=11)
+    axes[0].set_ylabel("全クラスの正解率（%、上位 1 人）")
+    fig.suptitle("実験10：付け足した専門家を、受付係と専門家の学び直しでまとめる（3 seed の平均、ひげは標準誤差）", x=0.01, ha="left", color=INK, fontsize=11)
+    fig.tight_layout()
+    fig.savefig(os.path.join(OUT, "exp10_consolidate.png"), dpi=150)
+    plt.close(fig)
+    print("書き出し: exp10_consolidate.png")
+
